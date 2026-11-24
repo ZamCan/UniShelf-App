@@ -10,26 +10,48 @@ jobs:
   native:
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Inspect runner and install prerequisites
         run: |
+          set -Eeuo pipefail
+          trap 'rc=$?; echo "::error::Exit $rc at line $LINENO: $BASH_COMMAND"; exit "$rc"' ERR
           df -h
           free -h
           sudo apt-get update
           sudo apt-get install -y autoconf automake bison flex gperf nasm pkg-config libtool python3-dev zip unzip ccache
-          sdkmanager "ndk;27.2.12479018" "build-tools;30.0.3" "platforms;android-35"
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [[ -z "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          fi
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" --version
+          java -version
+          command -v make git python3 autoconf
+          "$SDKMANAGER" --install "ndk;27.2.12479018" "build-tools;30.0.3" "platforms;android-35"
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
       - name: Fetch upstream Android engine
         run: |
+          set -Eeuo pipefail
+          trap 'rc=$?; echo "::error::Exit $rc at line $LINENO: $BASH_COMMAND"; exit "$rc"' ERR
           git clone --depth 1 --branch libreoffice-25.8.0.1 https://github.com/LibreOffice/core.git core
           cd core
           git rev-parse HEAD
       - name: Configure and compile ARM64 editing runtime
         run: |
+          set -Eeuo pipefail
+          trap 'rc=$?; echo "::error::Exit $rc at line $LINENO: $BASH_COMMAND"; exit "$rc"' ERR
           cd core
           ./autogen.sh --with-distro=LibreOfficeAndroidAarch64 --with-android-sdk="$ANDROID_HOME" --with-android-ndk="$ANDROID_HOME/ndk/27.2.12479018" --enable-android-editing --with-parallelism=2
           make
       - name: Verify native library and APK outputs
         run: |
+          set -Eeuo pipefail
+          trap 'rc=$?; echo "::error::Exit $rc at line $LINENO: $BASH_COMMAND"; exit "$rc"' ERR
           find core -name liblo-native-code.so -print | tee native-files.txt
           test -s native-files.txt
           find core/android -name '*.apk' -print | tee apk-files.txt
