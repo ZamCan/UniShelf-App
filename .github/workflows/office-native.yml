@@ -14,6 +14,10 @@ jobs:
       run:
         shell: bash
     steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
       - name: Inspect runner and install prerequisites
         run: |
           set -Eeuo pipefail
@@ -21,7 +25,7 @@ jobs:
           df -h
           free -h
           sudo apt-get update
-          sudo apt-get install -y autoconf automake bison flex gperf nasm pkg-config libtool python3-dev zip unzip ccache
+          sudo apt-get install -y autoconf automake bison flex gperf nasm pkg-config libtool python3-dev zip unzip ccache make gcc g++ perl gettext gawk libxml2-utils xsltproc libfontconfig1-dev libfreetype6-dev libx11-dev libxext-dev libxrender-dev libxrandr-dev libxinerama-dev libxt-dev libcups2-dev libdbus-1-dev libglib2.0-dev
           export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           SDKMANAGER="$(command -v sdkmanager || true)"
           if [[ -z "$SDKMANAGER" ]]; then
@@ -46,7 +50,13 @@ jobs:
           set -Eeuo pipefail
           trap 'rc=$?; echo "::error::Exit $rc at line $LINENO: $BASH_COMMAND"; exit "$rc"' ERR
           cd core
-          ./autogen.sh --with-distro=LibreOfficeAndroidAarch64 --with-android-sdk="$ANDROID_HOME" --with-android-ndk="$ANDROID_HOME/ndk/27.2.12479018" --enable-android-editing --with-parallelism=2
+          if ./autogen.sh --with-distro=LibreOfficeAndroidAarch64 --with-android-sdk="$ANDROID_HOME" --with-android-ndk="$ANDROID_HOME/ndk/27.2.12479018" --with-jdk-home="$JAVA_HOME" --enable-android-editing --with-parallelism=2 2>&1 | tee "$GITHUB_WORKSPACE/configure-output.log"; then
+            echo 'Configuration passed'
+          else
+            detail="$(grep -E 'configure: error:|Error running|not found|command not found' "$GITHUB_WORKSPACE/configure-output.log" | tail -8 | tr '\n' ' ' || true)"
+            echo "::error title=LibreOffice configuration failure::$detail"
+            exit 1
+          fi
           make
       - name: Verify native library and APK outputs
         run: |
@@ -61,3 +71,13 @@ jobs:
           name: upstream-office-prototype
           path: core/android/**/*.apk
           if-no-files-found: error
+      - name: Preserve configuration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-configuration-diagnostics
+          path: |
+            configure-output.log
+            core/config.log
+            core/config_host/config.log
+          if-no-files-found: warn
