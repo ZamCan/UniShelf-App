@@ -262,8 +262,16 @@ jobs:
           cat "dist/${ENGINE_NAME}.tar.gz.sha256"
           echo "--- apk checksums ---"
           cat dist/apk-sha256sums.txt
+      - name: Ensure ccache directory exists
+        if: always()
+        run: mkdir -p "$CCACHE_DIR"
       - name: Save ccache
-        if: success()
+        # A failed attempt is exactly when the compiled objects are worth
+        # keeping: the next run reuses them instead of paying for a full cold
+        # build again. Saving under a key that already exists (a retry of the
+        # same commit) is not an error, so it must not fail the job.
+        if: always()
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
