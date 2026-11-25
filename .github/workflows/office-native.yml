@@ -25,7 +25,7 @@ jobs:
           df -h
           free -h
           sudo apt-get update
-          sudo apt-get install -y autoconf automake bison flex gperf nasm pkg-config libtool python3-dev zip unzip ccache make gcc g++ perl gettext gawk libxml2-utils xsltproc libfontconfig1-dev libfreetype6-dev libx11-dev libxext-dev libxrender-dev libxrandr-dev libxinerama-dev libxt-dev libcups2-dev libdbus-1-dev libglib2.0-dev
+          sudo apt-get install -y autoconf automake bison flex gperf nasm pkg-config libtool python3-dev zip unzip ccache make gcc g++ perl gettext gawk libxml2-dev libxslt1-dev libxml2-utils xsltproc libcairo2-dev libfontconfig1-dev libfreetype6-dev libx11-dev libxext-dev libxrender-dev libxrandr-dev libxinerama-dev libxt-dev libcups2-dev libdbus-1-dev libglib2.0-dev
           export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           SDKMANAGER="$(command -v sdkmanager || true)"
           if [[ -z "$SDKMANAGER" ]]; then
