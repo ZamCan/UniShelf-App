@@ -1,0 +1,11 @@
+build/
+work/
+out/
+*.idsig
+*.apk
+!office/assets/unishelf_office/*.docx
+!office/assets/unishelf_office/*.xlsx
+!office/assets/unishelf_office/*.pptx
+!office/assets/unishelf_office/*.odt
+!office/assets/unishelf_office/*.ods
+!office/assets/unishelf_office/*.odp

@@ -1,0 +1,139 @@
+name: Build and runtime-test UniShelf Office
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'office/**'
+      - 'tools/**'
+      - '.github/workflows/office-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: |
+          set -Eeuo pipefail
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+
+      - name: Build self-test APK from the original release
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          BUILD_TOOLS: '35.0.0'
+          API: '35'
+          SELFTEST: '1'
+          WORK: ${{ runner.temp }}/unishelf-work
+          OUT_DIR: ${{ runner.temp }}/unishelf-out
+        run: |
+          set -Eeuo pipefail
+          ./tools/build-office-apk.sh
+
+      - name: Verify APK structure and preservation
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          BUILD_TOOLS: '35.0.0'
+        run: |
+          set -Eeuo pipefail
+          APK="$RUNNER_TEMP/unishelf-out/UniShelf-Office-selftest-debug.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" > "$RUNNER_TEMP/badging.txt"
+          grep -q "package: name='com.unishelf.app'" "$RUNNER_TEMP/badging.txt"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > "$RUNNER_TEMP/manifest.txt"
+          grep -q 'org.unishelf.office.OfficeActivity' "$RUNNER_TEMP/manifest.txt"
+          grep -q 'extractNativeLibs' "$RUNNER_TEMP/manifest.txt"
+          unzip -l "$APK" | grep -q 'classes2.dex'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/liblo-native-code.so'
+          unzip -l "$APK" | grep -q 'assets/unishelf_office/blank.docx'
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$APK"
+          echo "APK size: $(stat -c%s "$APK") bytes"
+          sha256sum "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unishelf-office-selftest-apk
+          path: ${{ runner.temp }}/unishelf-out/UniShelf-Office-selftest-debug.apk
+          if-no-files-found: error
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: unishelf-office-selftest-apk
+          path: ${{ runner.temp }}/apk
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Enable KVM (harmless when unavailable)
+        run: |
+          set +e
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          exit 0
+
+      - name: Boot arm64 Android and run the on-device self-test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: default
+          arch: arm64-v8a
+          profile: pixel_2
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 8192M
+          emulator-boot-timeout: 1800
+          disable-linux-hw-accel: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -memory 4096
+          script: |
+            set -Eeuo pipefail
+            adb wait-for-device
+            adb shell getprop ro.product.cpu.abi
+            APK="$RUNNER_TEMP/apk/UniShelf-Office-selftest-debug.apk"
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell am start -W -n com.unishelf.app/org.unishelf.office.OfficeActivity --ez UNISHELF_SELFTEST true
+            RESULT="/sdcard/Android/data/com.unishelf.app/files/selftest-result.txt"
+            for i in $(seq 1 90); do
+              if adb shell test -f "$RESULT"; then
+                break
+              fi
+              sleep 5
+            done
+            adb shell cat "$RESULT" || true
+            adb pull "$RESULT" "$RUNNER_TEMP/selftest-result.txt" || true
+            adb logcat -d -s UniShelfSelfTest:V UniShelfOffice:V LibreOfficeKit:V AndroidRuntime:E > "$RUNNER_TEMP/logcat.txt" || true
+            if ! adb shell grep -q '^result=PASS$' "$RESULT"; then
+              echo '::error title=On-device LibreOffice self-test failed::See logcat artifact'
+              exit 1
+            fi
+            echo 'On-device LibreOffice self-test passed'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unishelf-office-runtime-diagnostics
+          path: |
+            ${{ runner.temp }}/selftest-result.txt
+            ${{ runner.temp }}/logcat.txt
+          if-no-files-found: warn

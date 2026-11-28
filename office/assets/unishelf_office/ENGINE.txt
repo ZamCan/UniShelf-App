@@ -1,0 +1,21 @@
+UniShelf Office engine manifest
+===============================
+
+Engine: LibreOfficeKit from LibreOffice Viewer for Android
+Version: 26.2.7.3 (F-Droid versionCode 135)
+ABI: arm64-v8a
+Source package: https://f-droid.org/repo/org.documentfoundation.libreoffice_135.apk
+Source package SHA-256: e921bfb14170824572eb1e33643538803681226427948c245084f5e6356c3775
+
+Base application:
+Package: com.unishelf.app 1.0.0 (versionCode 2001)
+Artifact: UniShelf-arm64-v8a.apk
+SHA-256: f67f918ad2e7f615f8a344dfd84f3aff7e05187ad763963258f3998084613902
+
+The native libraries and runtime assets are copied unmodified from the
+official F-Droid package. The original base application classes.dex,
+Flutter assets and resource IDs are preserved. This editor runs offline and
+does not upload documents.
+
+Licenses: MPL-2.0 (LibreOffice, NSS, NSPR); SQLite public domain; LLVM libc++
+under its upstream license. See THIRD_PARTY.md and LICENSES/MPL-2.0.txt.
