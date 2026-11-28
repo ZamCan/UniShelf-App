@@ -14,7 +14,6 @@ env:
   CCACHE_MAXSIZE: 5G
   CCACHE_COMPRESS: 'true'
   CCACHE_COMPRESSLEVEL: '6'
-  CCACHE_SLOPPINESS: 'time_macros,include_file_ctime,include_file_mtime'
   CCACHE_BASEDIR: ${{ github.workspace }}
   ENGINE_ABI: arm64-v8a
 jobs:
@@ -67,7 +66,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: lo-ccache-25.8.0.1-${{ env.ENGINE_ABI }}-${{ github.sha }}
+          key: lo-ccache-25.8.0.1-${{ env.ENGINE_ABI }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             lo-ccache-25.8.0.1-${{ env.ENGINE_ABI }}-
       - name: Prepare ccache
@@ -94,6 +93,8 @@ jobs:
           trap 'rc=$?; echo "::error::Exit $rc at line $LINENO: $BASH_COMMAND"; exit "$rc"' ERR
           cd core
           JOBS="$(nproc)"
+          MEM_JOBS="$(awk '/MemAvailable:/ {n=int($2/3145728); print (n<1?1:n)}' /proc/meminfo)"
+          if (( JOBS > MEM_JOBS )); then JOBS="$MEM_JOBS"; fi
           echo "Building with $JOBS parallel jobs"
           if ./autogen.sh --with-distro=LibreOfficeAndroidAarch64 \
               --with-android-sdk="$ANDROID_HOME" \
@@ -140,20 +141,36 @@ jobs:
           rm -rf dist
           mkdir -p "$STAGE/lib" "$STAGE/licenses"
 
-          SO_SRC="$(head -1 native-files.txt)"
-          test -f "$SO_SRC"
-          install -m 0755 "$SO_SRC" "$STAGE/lib/liblo-native-code.so"
-
-          # Strip with the NDK's multi-arch binutils; host strip cannot handle
-          # aarch64 ELF reliably. Record whether stripping happened.
-          LLVM_STRIP="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          # Package a coherent upstream APK, not an arbitrary host library.
+          python3 - <<'PY'
+          import pathlib, zipfile, struct, shutil
+          candidates = []
+          for p in pathlib.Path("core/android").rglob("*.apk"):
+              with zipfile.ZipFile(p) as z:
+                  names = z.namelist()
+                  libs = [n for n in names if n.startswith("lib/arm64-v8a/") and n.endswith(".so")]
+                  if not any(n.endswith("/liblo-native-code.so") for n in libs):
+                      continue
+                  if not any(n.startswith("assets/") and not n.endswith("/") for n in names):
+                      continue
+                  if "classes.dex" not in names or z.testzip() is not None:
+                      continue
+                  candidates.append(p)
+          if not candidates:
+              raise SystemExit("No coherent ARM64 LibreOffice APK found")
+          stage = next(pathlib.Path("dist").glob("unishelf-office-engine-*"))
+          for i, p in enumerate(sorted(candidates)):
+              target = stage / ("upstream-" + str(i) + ".apk")
+              shutil.copy2(p, target)
+          with zipfile.ZipFile(sorted(candidates)[0]) as z:
+              for n in z.namelist():
+                  if n.startswith("lib/arm64-v8a/") and n.endswith(".so"):
+                      data = z.read(n)
+                      if data[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", data, 18)[0] != 183:
+                          raise SystemExit("Invalid ARM64 ELF: " + n)
+                      (stage / "lib" / pathlib.Path(n).name).write_bytes(data)
+          PY
           STRIPPED="false"
-          if [[ -x "$LLVM_STRIP" ]]; then
-            "$LLVM_STRIP" --strip-unneeded "$STAGE/lib/liblo-native-code.so"
-            STRIPPED="true"
-          else
-            echo "::warning title=Strip skipped::llvm-strip not found at $LLVM_STRIP"
-          fi
 
           # Upstream licensing: MPL-2.0 / LGPLv3 umbrella files plus NOTICE.
           license_sources=()
@@ -172,7 +189,7 @@ jobs:
             "UniShelf offline office engine (${ENGINE_ABI})" \
             "===============================================" \
             "" \
-            "Contents: liblo-native-code.so, built from the LibreOffice core engine." \
+            "Contents: upstream Android APK(s) with matching bindings, assets and ARM64 libraries; extracted native libraries for inspection." \
             "" \
             "Upstream project: The Document Foundation / LibreOffice" \
             "Upstream tag:     libreoffice-25.8.0.1" \
@@ -187,7 +204,7 @@ jobs:
             "https://www.libreoffice.org/about-us/licenses/ for the authoritative list," \
             "including third-party components bundled inside the engine." \
             "" \
-            "This archive contains build output only. It is not a modified source release;" \
+            "This archive contains upstream build output, not a verified UniShelf integration;" \
             "the corresponding sources are available at the upstream URL above and are" \
             "unchanged." \
             > "$STAGE/NOTICE.txt"
@@ -225,7 +242,17 @@ jobs:
             '  "license": "MPL-2.0 OR LGPL-3.0-or-later (see licenses/)"' \
             '}' \
             > "$STAGE/manifest.json"
-          python3 -m json.tool "$STAGE/manifest.json" > /dev/null
+          python3 - "$STAGE" <<'PY'
+          import hashlib, json, pathlib, sys
+          stage = pathlib.Path(sys.argv[1])
+          p = stage / "manifest.json"
+          m = json.loads(p.read_text())
+          m["verification"] = "package inspection only; Android execution and editing unverified"
+          m["payload"] = [{"path": str(f.relative_to(stage)), "bytes": f.stat().st_size,
+                           "sha256": hashlib.file_digest(f.open("rb"), "sha256").hexdigest()}
+                          for f in sorted(stage.rglob("*")) if f.is_file() and f != p]
+          p.write_text(json.dumps(m, indent=2) + "\n")
+          PY
 
           # Checksums cover every payload file, then the archive itself.
           (
